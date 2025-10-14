@@ -465,6 +465,92 @@ class CPSizeAllocator(BaseAllocator):
         return weights
 
 
+class CPKatoHRLRAllocator(BaseAllocator):
+    """
+    Kato's High-Return-from-Low-Risk (HR-LR) CPPS allocation.
+    Implements a two-stage filtering approach:
+    1. Filter assets with highest lower bounds (reduce downside risk)
+    2. From filtered set, weight by upper bounds (maximize upside potential)
+    
+    Reference: Kato (2024) - Conformal Predictive Portfolio Selection
+    """
+    
+    def __init__(self, 
+                 lower_percentile: float = 0.5,
+                 **kwargs):
+        """
+        Initialize Kato HR-LR allocator.
+        
+        Parameters:
+        -----------
+        lower_percentile : float
+            Percentile threshold for first filter (0.5 = top 50% by lower bound)
+        """
+        super().__init__(**kwargs)
+        self.lower_percentile = lower_percentile
+    
+    def allocate(self,
+                 forecasts: np.ndarray,
+                 lower_bounds: np.ndarray,
+                 upper_bounds: np.ndarray,
+                 cov_matrix: Optional[np.ndarray] = None,
+                 prev_weights: Optional[np.ndarray] = None) -> np.ndarray:
+        """
+        Compute Kato HR-LR weights.
+        
+        Parameters:
+        -----------
+        forecasts : np.ndarray
+            Point forecasts
+        lower_bounds : np.ndarray
+            Lower bounds of prediction intervals
+        upper_bounds : np.ndarray
+            Upper bounds of prediction intervals
+        cov_matrix : np.ndarray, optional
+            Covariance matrix
+        prev_weights : np.ndarray, optional
+            Previous weights
+            
+        Returns:
+        --------
+        np.ndarray : Kato HR-LR weights
+        """
+        n_assets = len(forecasts)
+        
+        # Stage 1: Filter by lower bounds (reduce downside risk)
+        lower_threshold = np.quantile(lower_bounds, self.lower_percentile)
+        safe_assets = lower_bounds >= lower_threshold
+        
+        if not np.any(safe_assets):
+            # Fallback: use all assets
+            safe_assets = np.ones(n_assets, dtype=bool)
+        
+        # Stage 2: Among safe assets, weight by upper bounds (maximize upside)
+        weights = np.zeros(n_assets)
+        upper_filtered = upper_bounds * safe_assets
+        upper_positive = np.maximum(upper_filtered, 0)
+        
+        if upper_positive.sum() > 1e-6:
+            weights = upper_positive / upper_positive.sum()
+        else:
+            # Fallback: equal weight among safe assets
+            weights[safe_assets] = 1.0 / safe_assets.sum()
+        
+        # Apply constraints
+        weights = self.apply_constraints(weights, prev_weights)
+        
+        # Volatility targeting
+        if cov_matrix is not None:
+            portfolio_vol = np.sqrt(weights @ cov_matrix @ weights)
+            if portfolio_vol > 1e-6:
+                scale = self.vol_target / portfolio_vol
+                scale = min(scale, 1.5)
+                weights = weights * scale
+                weights = weights / weights.sum()
+        
+        return weights
+
+
 class CPLowerBoundAllocator(BaseAllocator):
     """
     CP-Lower-Bound (Safety First) allocation.
@@ -550,7 +636,8 @@ class CPLowerBoundAllocator(BaseAllocator):
 
 
 def create_all_allocators(vol_target: float = 0.10,
-                          max_turnover: float = 0.20) -> Dict[str, BaseAllocator]:
+                          max_turnover: float = 0.20,
+                          include_kato: bool = False) -> Dict[str, BaseAllocator]:
     """
     Create all allocation strategies.
     
@@ -560,6 +647,8 @@ def create_all_allocators(vol_target: float = 0.10,
         Target portfolio volatility
     max_turnover : float
         Maximum turnover per rebalance
+    include_kato : bool
+        Whether to include Kato's HR-LR method
         
     Returns:
     --------
@@ -593,6 +682,13 @@ def create_all_allocators(vol_target: float = 0.10,
             max_turnover=max_turnover
         ),
     }
+    
+    if include_kato:
+        allocators['cp_kato_hrlr'] = CPKatoHRLRAllocator(
+            lower_percentile=0.5,
+            vol_target=vol_target,
+            max_turnover=max_turnover
+        )
     
     return allocators
 

@@ -44,3 +44,14 @@ Thumbs.db
 venv/
 env/
 ENV/
+
+# Project-specific files
+m3.txt
+m3.pdf
+m3.docx
+*.docx
+*.pdf
+
+# Reports and outputs
+*_output.ipynb
+*_draft.ipynb

@@ -198,7 +198,7 @@ class Backtester:
     
     def __init__(self,
                  data_loader,
-                 train_window: int = 504,
+                 train_window: int = 756,
                  cal_window: int = 126,
                  rebalance_freq: int = 1,
                  transaction_cost: float = 0.001,
@@ -211,9 +211,11 @@ class Backtester:
         data_loader : DataLoader
             Loaded data object
         train_window : int
-            Training window size (days), default 504 (2 years)
+            Training window size (days), default 756 (~3 years)
+            Extended from 2 years to provide more robust estimation
+            and reduce overfitting bias in stress period testing
         cal_window : int
-            Calibration window size (days), default 126 (6 months)
+            Calibration window size (days), default 126 (~6 months)
         rebalance_freq : int
             Rebalancing frequency (days)
         transaction_cost : float
