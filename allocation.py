@@ -378,7 +378,22 @@ class CPSizeAllocator(BaseAllocator):
     CP-Size allocation.
     Weight inversely proportional to prediction interval width.
     Allocates more to assets with higher forecast precision.
+    
+    Note: Uses cross-sectional standardization to amplify differences
+    when interval widths are similar across assets.
     """
+    
+    def __init__(self, use_standardization: bool = True, **kwargs):
+        """
+        Initialize CP-Size allocator.
+        
+        Parameters:
+        -----------
+        use_standardization : bool
+            Whether to standardize widths cross-sectionally
+        """
+        super().__init__(**kwargs)
+        self.use_standardization = use_standardization
     
     def allocate(self,
                  forecasts: np.ndarray,
@@ -409,9 +424,22 @@ class CPSizeAllocator(BaseAllocator):
         # Interval widths
         widths = upper_bounds - lower_bounds
         
-        # Precision = 1 / (width + epsilon)
-        epsilon = np.median(widths) * 0.1
-        precision = 1.0 / (widths + epsilon)
+        # Check width dispersion
+        width_std = widths.std()
+        width_mean = widths.mean()
+        dispersion = width_std / (width_mean + 1e-8)
+        
+        # If widths are very similar and standardization enabled, standardize them
+        if self.use_standardization and dispersion < 0.3:
+            # Z-score the widths to amplify differences
+            widths_std = (widths - width_mean) / (width_std + 1e-8)
+            # Map to precision: high width → low precision
+            # Use exponential to maintain positivity and amplify differences
+            precision = np.exp(-widths_std)
+        else:
+            # Original method: direct inverse
+            epsilon = np.median(widths) * 0.1
+            precision = 1.0 / (widths + epsilon)
         
         # Weight = forecast * precision (only positive forecasts)
         weights = np.maximum(forecasts, 0) * precision
