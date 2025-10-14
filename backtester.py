@@ -104,7 +104,8 @@ class PerformanceMetrics:
     @staticmethod
     def calculate_metrics(returns: pd.Series, 
                          positions: pd.DataFrame = None,
-                         regime_labels: pd.Series = None) -> Dict:
+                         regime_labels: pd.Series = None,
+                         annualize: bool = True) -> Dict:
         """
         Calculate comprehensive performance metrics.
         
@@ -116,6 +117,8 @@ class PerformanceMetrics:
             Position weights over time
         regime_labels : pd.Series, optional
             Regime labels for regime-specific metrics
+        annualize : bool
+            Whether to annualize metrics (False for short stress test periods)
             
         Returns:
         --------
@@ -123,13 +126,22 @@ class PerformanceMetrics:
         """
         # Basic returns
         total_return = (1 + returns).prod() - 1
-        ann_return = (1 + total_return) ** (252 / len(returns)) - 1
         
-        # Volatility
-        ann_vol = returns.std() * np.sqrt(252)
+        # Annualization - only if period > 90 days OR explicitly requested
+        if annualize and len(returns) >= 90:
+            ann_return = (1 + total_return) ** (252 / len(returns)) - 1
+            ann_vol = returns.std() * np.sqrt(252)
+        else:
+            # Don't annualize short periods - use actual values
+            ann_return = total_return
+            ann_vol = returns.std()
         
         # Sharpe ratio
-        sharpe = ann_return / (ann_vol + 1e-8)
+        if annualize and len(returns) >= 90:
+            sharpe = ann_return / (ann_vol + 1e-8)
+        else:
+            # For short periods: use raw mean/std ratio
+            sharpe = (returns.mean() / (returns.std() + 1e-8)) * np.sqrt(len(returns))
         
         # Sortino ratio (downside deviation)
         downside_returns = returns[returns < 0]
@@ -186,7 +198,7 @@ class Backtester:
     
     def __init__(self,
                  data_loader,
-                 train_window: int = 252,
+                 train_window: int = 504,
                  cal_window: int = 126,
                  rebalance_freq: int = 1,
                  transaction_cost: float = 0.001,
@@ -199,9 +211,9 @@ class Backtester:
         data_loader : DataLoader
             Loaded data object
         train_window : int
-            Training window size (days)
+            Training window size (days), default 504 (2 years)
         cal_window : int
-            Calibration window size (days)
+            Calibration window size (days), default 126 (6 months)
         rebalance_freq : int
             Rebalancing frequency (days)
         transaction_cost : float
@@ -428,11 +440,12 @@ class Backtester:
                 index=portfolio_returns.index
             )
         
-        # Calculate metrics
+        # Calculate metrics (annualize=True for main backtest)
         metrics = PerformanceMetrics.calculate_metrics(
             portfolio_returns,
             positions,
-            regime_labels
+            regime_labels,
+            annualize=True
         )
         
         # Add CP-specific metrics
@@ -546,7 +559,10 @@ class Backtester:
             period_returns = returns[(returns.index >= start_date) & (returns.index <= end_date)]
             
             if len(period_returns) > 0:
-                metrics = PerformanceMetrics.calculate_metrics(period_returns)
+                # Don't annualize short stress test periods (misleading)
+                metrics = PerformanceMetrics.calculate_metrics(period_returns, annualize=False)
+                # Add period length for context
+                metrics['n_days'] = len(period_returns)
                 stress_metrics[strategy_name] = metrics
         
         stress_df = pd.DataFrame(stress_metrics).T
