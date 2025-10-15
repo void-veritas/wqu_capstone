@@ -457,6 +457,7 @@ class Backtester:
         results = {
             'returns': portfolio_returns,
             'positions': positions,
+            'weights_history': positions.values,  # Add weights history for visualization
             'turnover': turnover,
             'metrics': metrics,
             'regime_labels': regime_labels
