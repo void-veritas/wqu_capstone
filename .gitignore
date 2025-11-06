@@ -55,3 +55,14 @@ m3.docx
 # Reports and outputs
 *_output.ipynb
 *_draft.ipynb
+
+# Optimization outputs
+optimization_output.log
+optimal_parameters.json
+
+# Temporary files
+*.log
+*.tmp
+
+# Archive folder (interim documentation and old versions)
+archive/

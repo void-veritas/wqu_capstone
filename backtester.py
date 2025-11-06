@@ -13,8 +13,11 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from hmmlearn import hmm
 from tqdm import tqdm
+import copy
 import warnings
 warnings.filterwarnings('ignore')
+
+from conformal import SplitConformalPredictor
 
 
 class RegimeDetector:
@@ -262,7 +265,8 @@ class Backtester:
         --------
         dict : Backtest results
         """
-        print(f"\nBacktesting {strategy_name}...")
+        # Suppress print during optimization (will be handled by caller if needed)
+        # print(f"\nBacktesting {strategy_name}...")
         
         # Get data
         returns = self.data_loader.returns
@@ -303,77 +307,117 @@ class Backtester:
             train_dates = returns.index[train_start_idx:train_start_idx + self.train_window]
             cal_dates = returns.index[train_start_idx + self.train_window:train_start_idx + self.train_window + self.cal_window]
             
-            # Prepare training/calibration data
-            X_train_list, y_train_list = [], []
-            X_cal_list, y_cal_list = [], []
-            X_test_list = []
-            
-            for ticker in tickers:
-                # Training
-                ticker_train = features[
-                    (features['date'].isin(train_dates)) & 
-                    (features['ticker'] == ticker)
-                ]
-                ticker_train_targets = targets[
-                    (targets['date'].isin(train_dates)) & 
-                    (targets['ticker'] == ticker)
-                ]
-                
-                if len(ticker_train) > 0 and len(ticker_train_targets) > 0:
-                    X_train_list.append(ticker_train.drop(columns=['date', 'ticker']))
-                    y_train_list.append(ticker_train_targets['target'])
-                
-                # Calibration
-                ticker_cal = features[
-                    (features['date'].isin(cal_dates)) & 
-                    (features['ticker'] == ticker)
-                ]
-                ticker_cal_targets = targets[
-                    (targets['date'].isin(cal_dates)) & 
-                    (targets['ticker'] == ticker)
-                ]
-                
-                if len(ticker_cal) > 0 and len(ticker_cal_targets) > 0:
-                    X_cal_list.append(ticker_cal.drop(columns=['date', 'ticker']))
-                    y_cal_list.append(ticker_cal_targets['target'])
-                
-                # Test (current date)
-                ticker_test = features[
-                    (features['date'] == test_date) & 
-                    (features['ticker'] == ticker)
-                ]
-                
-                if len(ticker_test) > 0:
-                    X_test_list.append(ticker_test.drop(columns=['date', 'ticker']))
-            
-            if len(X_train_list) == 0 or len(X_test_list) != n_assets:
-                continue
-            
-            X_train = pd.concat(X_train_list, axis=0)
-            y_train = pd.concat(y_train_list, axis=0)
-            X_cal = pd.concat(X_cal_list, axis=0)
-            y_cal = pd.concat(y_cal_list, axis=0)
-            X_test = pd.concat(X_test_list, axis=0)
-            
-            # Fit model
+            # Fit model - PER ASSET for proper calibration
             try:
                 if conformal_predictor:
-                    # Conformal prediction strategy
-                    conformal_predictor.fit(X_train, y_train, X_cal, y_cal)
-                    y_pred, lower, upper = conformal_predictor.predict(X_test)
+                    # Conformal prediction strategy: fit per-asset for proper calibration
+                    y_pred_list, lower_list, upper_list = [], [], []
+                    
+                    for ticker in tickers:
+                        # Get per-asset data
+                        ticker_train = features[
+                            (features['date'].isin(train_dates)) & 
+                            (features['ticker'] == ticker)
+                        ]
+                        ticker_train_targets = targets[
+                            (targets['date'].isin(train_dates)) & 
+                            (targets['ticker'] == ticker)
+                        ]
+                        
+                        ticker_cal = features[
+                            (features['date'].isin(cal_dates)) & 
+                            (features['ticker'] == ticker)
+                        ]
+                        ticker_cal_targets = targets[
+                            (targets['date'].isin(cal_dates)) & 
+                            (targets['ticker'] == ticker)
+                        ]
+                        
+                        ticker_test = features[
+                            (features['date'] == test_date) & 
+                            (features['ticker'] == ticker)
+                        ]
+                        
+                        if (len(ticker_train) == 0 or len(ticker_train_targets) == 0 or
+                            len(ticker_cal) == 0 or len(ticker_cal_targets) == 0 or
+                            len(ticker_test) == 0):
+                            # Fallback: use zero prediction
+                            y_pred_list.append(0.0)
+                            lower_list.append(0.0)
+                            upper_list.append(0.0)
+                            continue
+                        
+                        # Prepare per-asset data
+                        X_train_ticker = ticker_train.drop(columns=['date', 'ticker']).values
+                        y_train_ticker = ticker_train_targets['target'].values
+                        X_cal_ticker = ticker_cal.drop(columns=['date', 'ticker']).values
+                        y_cal_ticker = ticker_cal_targets['target'].values
+                        X_test_ticker = ticker_test.drop(columns=['date', 'ticker']).values
+                        
+                        # Create per-asset conformal predictor (clone the template)
+                        cp_ticker = SplitConformalPredictor(
+                            copy.deepcopy(conformal_predictor.model),
+                            alpha=conformal_predictor.alpha
+                        )
+                        
+                        # Fit per-asset
+                        cp_ticker.fit(X_train_ticker, y_train_ticker, X_cal_ticker, y_cal_ticker)
+                        y_pred_ticker, lower_ticker, upper_ticker = cp_ticker.predict(X_test_ticker)
+                        
+                        # Store results (should be single value per asset)
+                        y_pred_list.append(y_pred_ticker[0] if len(y_pred_ticker) > 0 else 0.0)
+                        lower_list.append(lower_ticker[0] if len(lower_ticker) > 0 else 0.0)
+                        upper_list.append(upper_ticker[0] if len(upper_ticker) > 0 else 0.0)
+                    
+                    # Convert to arrays
+                    y_pred = np.array(y_pred_list)
+                    lower = np.array(lower_list)
+                    upper = np.array(upper_list)
                     
                     # Track coverage/width
                     forecasts_history.append(y_pred)
                     width_history.append(np.mean(upper - lower))
                     
                 else:
-                    # Non-CP strategy
+                    # Non-CP strategy: can use concatenated data (model handles multi-asset)
+                    X_train_list, y_train_list = [], []
+                    X_test_list = []
+                    
+                    for ticker in tickers:
+                        ticker_train = features[
+                            (features['date'].isin(train_dates)) & 
+                            (features['ticker'] == ticker)
+                        ]
+                        ticker_train_targets = targets[
+                            (targets['date'].isin(train_dates)) & 
+                            (targets['ticker'] == ticker)
+                        ]
+                        ticker_test = features[
+                            (features['date'] == test_date) & 
+                            (features['ticker'] == ticker)
+                        ]
+                        
+                        if len(ticker_train) > 0 and len(ticker_train_targets) > 0:
+                            X_train_list.append(ticker_train.drop(columns=['date', 'ticker']))
+                            y_train_list.append(ticker_train_targets['target'])
+                        if len(ticker_test) > 0:
+                            X_test_list.append(ticker_test.drop(columns=['date', 'ticker']))
+                    
+                    if len(X_train_list) == 0 or len(X_test_list) != n_assets:
+                        continue
+                    
+                    X_train = pd.concat(X_train_list, axis=0)
+                    y_train = pd.concat(y_train_list, axis=0)
+                    X_test = pd.concat(X_test_list, axis=0)
+                    
                     model.fit(X_train, y_train)
                     y_pred = model.predict(X_test)
                     lower, upper = None, None
                 
             except Exception as e:
                 print(f"Error at {test_date}: {e}")
+                import traceback
+                traceback.print_exc()
                 continue
             
             # Get covariance matrix
@@ -391,7 +435,7 @@ class Backtester:
                 elif strategy_name in ['cp_gate', 'cp_size']:
                     weights = allocator.allocate(y_pred, lower, upper, cov_matrix, prev_weights)
                 elif strategy_name == 'cp_lower_bound':
-                    weights = allocator.allocate(lower, cov_matrix, prev_weights)
+                    weights = allocator.allocate(lower, cov_matrix, prev_weights, upper_bounds=upper)
                 else:
                     weights = prev_weights
                     

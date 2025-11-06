@@ -11,7 +11,7 @@ This project investigates whether incorporating conformal prediction intervals a
 ├── allocation.py       # Portfolio allocation strategies (6 methods)
 ├── backtester.py       # Rolling backtest with regime detection
 ├── visualization.py    # Comprehensive plotting utilities
-├── report.ipynb        # Complete analysis and results
+├── report-ver2.ipynb    # Complete analysis and results
 └── requirements.txt    # Python dependencies
 ```
 
@@ -58,11 +58,11 @@ from allocation import create_all_allocators
 allocators = create_all_allocators()
 results = backtester.run_all_strategies(allocators=allocators)
 
-# See report.ipynb for full analysis and visualizations
+# See report-ver2.ipynb for full analysis and visualizations
 ```
 
 ## Key Results
-- **Best Performer**: CP-Gate (Sharpe: 1.47, Turnover: 0.26%)
+- **Best Performer**: CP-Gate (Sharpe: 1.45, Turnover: 0.16%)
 - **Transaction Cost Advantage**: CP methods show 40-60x lower turnover vs. traditional methods
 - **Robustness**: Validated across stress periods (COVID-19 2020, Inflation 2022)
 - **Coverage**: 90% conformal intervals with empirical validation

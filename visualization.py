@@ -246,12 +246,18 @@ class PortfolioVisualizer:
         
         for strategy_name in strategy_names:
             weights = weights_dict[strategy_name]
-            # Average over time
-            avg_weights = weights.mean(axis=0)
-            hhi = (avg_weights ** 2).sum()
-            eff_n = 1 / hhi if hhi > 0 else 0
-            hhi_list.append(hhi)
-            eff_n_list.append(eff_n)
+            # IMPORTANT: Calculate HHI and Effective N per period, then average
+            # This correctly handles strategies that allocate to different assets over time
+            # (e.g., CP-Gate which filters uncertain assets)
+            hhi_per_period = np.array([(w ** 2).sum() for w in weights])
+            eff_n_per_period = 1 / np.maximum(hhi_per_period, 1e-12)  # Avoid division by zero
+            
+            # Average across periods
+            avg_hhi = hhi_per_period.mean()
+            avg_eff_n = eff_n_per_period.mean()
+            
+            hhi_list.append(avg_hhi)
+            eff_n_list.append(avg_eff_n)
         
         # HHI plot
         ax = axes[0]
